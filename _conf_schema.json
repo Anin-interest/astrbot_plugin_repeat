@@ -1,0 +1,20 @@
+{
+    "repeat_group_list": {
+        "description": "复读群组列表",
+        "type": "list",
+        "hint": "只有在这些群组中才会触发复读",
+        "default": []
+    },
+    "repeat_target_list": {
+        "description": "回复目标列表",
+        "type": "list",
+        "hint": "只有回复目标列表中的成员会触发复读",
+        "default": []
+    },
+    "repeat_at_list": {
+        "description": "at成员列表",
+        "type": "list",
+        "hint": "消息中有at成员列表中的成员时会at发送者",
+        "default": []
+    }
+}

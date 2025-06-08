@@ -1,24 +1,114 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+import base64
+from pathlib import Path
+
+from astrbot import logger
+from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+from astrbot.core import AstrBotConfig
+from astrbot.core.platform import AstrMessageEvent
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
-class MyPlugin(Star):
-    def __init__(self, context: Context):
+import astrbot.core.message.components as Comp
+from astrbot.core.star.filter.event_message_type import EventMessageType
+
+
+@register(
+    "astrbot_plugin_reply",
+    "安音Anin",
+    "复读机机人（纯人机喵）",
+    "1.0.0",
+    "",
+)
+class RepeatPlugin(Star):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
+        self.group_list: list[str] = config.get("repeat_group_list", [])
+        self.target_list: list[str] = config.get("repeat_target_list", [])
+        self.at_list: list[str] = config.get("repeat_at_list", [])
 
-    async def initialize(self):
-        """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
-    
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令""" # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
+    @filter.event_message_type(EventMessageType.ALL)
+    async def repeat_handle(self, event: AstrMessageEvent):
+        """
+        狠狠复读
 
-    async def terminate(self):
-        """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
+        功能描述：
+        - 复读发送者的正常消息
+        - 根据
+        """
+        group_id: str = event.get_group_id()
+        sender_id: str = event.get_sender_id()
+        # 如果没有群ID或者不在群列表中，则不处理
+        if not group_id or not group_id in self.group_list:
+            return
+        # 若发送者不在回复列表中，则不处理
+        if not sender_id in self.target_list:
+            return
+
+        bot_id: str = event.get_self_id()
+        self.at_list.append(bot_id)  # 将机器人自己添加到at列表中
+        messages = event.get_messages()
+        result = []
+        async def _process_segment(_seg):
+            """处理消息段"""
+            if isinstance(_seg, Comp.Reply):
+                # 回复消息段，若回复了at列表中成员发的消息，则回复发送者的消息，否则连并回复一起复读
+                msg_id = event.message_obj.message_id
+
+                reply_seg = next((seg for seg in messages if isinstance(seg, Comp.Reply)), None)
+                reply_sender_id = reply_seg.sender_id
+                if not reply_sender_id in self.at_list:
+                    msg_id = reply_seg.id
+                
+                result.append(Comp.Reply(msg_id))
+            elif isinstance(_seg, Comp.Poke):
+                # 戳一戳消息段，如果戳一戳对象的QQ在at列表中，则戳发送者，否则复读（戳？
+                if _seg.qq in self.at_list:
+                    result.append(Comp.Poke(type=_seg.type, qq=sender_id))
+                else:
+                    result.append(Comp.Poke(type=_seg.type, qq=_seg.qq))
+            elif isinstance(_seg, Comp.Plain):
+                # 纯文本消息段直接复读
+                result.append(Comp.Plain(_seg.text))
+            elif isinstance(_seg, Comp.At):
+                # at消息段，检查是否在at列表中，在则At发送者，否则复读被at的QQ号
+                if str(_seg.qq) in self.at_list:
+                    result.append(Comp.At(sender_id))
+                else:
+                    result.append(Comp.At(_seg.qq))
+            elif isinstance(_seg, Comp.Image):
+                # 图片消息段，直接复读
+                image : bytes = None
+                if hasattr(_seg, "url") and _seg.url:
+                    img_url = _seg.url
+                    # 如果是有效的本地路径，则直接读取文件
+                    if Path(img_url).is_file():
+                        with open(img_url, "rb") as f:
+                            image = f.read()
+                    else:  # 否则尝试作为URL下载
+                        if msg_image := await self.download_image(img_url):
+                            image = msg_image
+
+                elif hasattr(_seg, "file"):
+                    file_content = _seg.file
+                    if isinstance(file_content, str):
+                        # 如果是有效的本地路径，则直接读取文件
+                        if Path(file_content).is_file():
+                            with open(file_content, "rb") as f:
+                                image = f.read()
+                        else:  # 否则尝试作为Base64编码解析
+                            if file_content.startswith("base64://"):
+                                file_content = file_content[len("base64://") :]
+                            file_content = base64.b64decode(file_content)
+                    if isinstance(file_content, bytes):
+                        image = file_content
+                result.append(Comp.Image.fromBytes(image))
+            elif isinstance(_seg, Comp.Face):
+                # 表情消息段，直接复读
+                result.append(Comp.Face(_seg.id))
+        # 遍历消息段落
+        for seg in messages:
+            await _process_segment(seg)
+
+        # 复读
+        if result:
+            yield event.chain_result(result)
