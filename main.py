@@ -1,5 +1,6 @@
 import base64
 from pathlib import Path
+import aiohttp
 
 from astrbot import logger
 from astrbot.api.event import filter
@@ -37,6 +38,7 @@ class RepeatPlugin(Star):
         """
         group_id: str = event.get_group_id()
         sender_id: str = event.get_sender_id()
+        sender_name: str = event.get_sender_name()
         # 如果没有群ID或者不在群列表中，则不处理
         if not group_id or not group_id in self.group_list:
             return
@@ -44,8 +46,7 @@ class RepeatPlugin(Star):
         if not sender_id in self.target_list:
             return
 
-        bot_id: str = event.get_self_id()
-        self.at_list.append(bot_id)  # 将机器人自己添加到at列表中
+        bot_qq: str = event.get_self_id()
         messages = event.get_messages()
         result = []
         async def _process_segment(_seg):
@@ -53,16 +54,14 @@ class RepeatPlugin(Star):
             if isinstance(_seg, Comp.Reply):
                 # 回复消息段，若回复了at列表中成员发的消息，则回复发送者的消息，否则连并回复一起复读
                 msg_id = event.message_obj.message_id
-
-                reply_seg = next((seg for seg in messages if isinstance(seg, Comp.Reply)), None)
-                reply_sender_id = reply_seg.sender_id
-                if not reply_sender_id in self.at_list:
-                    msg_id = reply_seg.id
-                
-                result.append(Comp.Reply(msg_id))
+                if not str(_seg.sender_id) in self.at_list:
+                    msg_id = _seg.id
+                result.append(Comp.Reply(id = msg_id))
             elif isinstance(_seg, Comp.Poke):
                 # 戳一戳消息段，如果戳一戳对象的QQ在at列表中，则戳发送者，否则复读（戳？
-                if _seg.qq in self.at_list:
+                if _seg.qq == bot_qq:
+                    return
+                elif _seg.qq in self.at_list:
                     result.append(Comp.Poke(type=_seg.type, qq=sender_id))
                 else:
                     result.append(Comp.Poke(type=_seg.type, qq=_seg.qq))
@@ -72,9 +71,9 @@ class RepeatPlugin(Star):
             elif isinstance(_seg, Comp.At):
                 # at消息段，检查是否在at列表中，在则At发送者，否则复读被at的QQ号
                 if str(_seg.qq) in self.at_list:
-                    result.append(Comp.At(sender_id))
+                    result.append(Comp.At(qq = sender_id, name=sender_name))
                 else:
-                    result.append(Comp.At(_seg.qq))
+                    result.append(Comp.At(qq = _seg.qq, name=_seg.name))
             elif isinstance(_seg, Comp.Image):
                 # 图片消息段，直接复读
                 image : bytes = None
@@ -112,3 +111,16 @@ class RepeatPlugin(Star):
         # 复读
         if result:
             yield event.chain_result(result)
+
+    @staticmethod
+    async def download_image(url: str) -> bytes | None:
+        """下载图片"""
+        url = url.replace("https://", "http://")
+        try:
+            async with aiohttp.ClientSession() as client:
+                response = await client.get(url)
+                img_bytes = await response.read()
+                return img_bytes
+        except Exception as e:
+            logger.error(f"图片下载失败: {e}")
+

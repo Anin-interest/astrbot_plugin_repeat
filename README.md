@@ -11,9 +11,9 @@
 ```bash
 # 克隆仓库到插件目录
 cd /AstrBot/data/plugins
-git https://github.com/Anin-interest/astrbot_plugin_repeat.git
+git clone https://github.com/Anin-interest/astrbot_plugin_repeat.git
 
-# 控制台重启AstrBot
+# 控制台重启AstrBot or 热重载插件
 ```
 
 ## 配置
